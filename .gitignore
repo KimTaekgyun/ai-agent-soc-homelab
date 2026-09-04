@@ -1,0 +1,6 @@
+*.env
+*.log
+watcher_state.json
+homenet_check.state
+*.full
+.DS_Store

@@ -1,0 +1,12 @@
+# suricata.yaml 변경분 발췌 (전체 파일 아님)
+
+HOME_NET: "[<HOME_PUBLIC_IP>/32]"
+# 근거: 센서가 NAT 외부(ISP 세그먼트)에 위치 — 내부 사설 대역으로는
+# ET 룰의 $HOME_NET 방향 조건이 매칭되지 않음 (8/28 진단)
+
+checksum-checks: no
+checksum-validation: no
+# 근거: NIC checksum offloading으로 인한 대량 오탐(52건/일) 제거 (8/28 검증)
+
+metadata: yes
+# 근거: eve.json에 룰 메타데이터(MITRE 태깅 등) 출력 활성화
