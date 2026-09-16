@@ -26,16 +26,16 @@ import time
 import urllib.request
 
 # ── 설정 ─────────────────────────────────────────────────────────
-ES_URL = "http://<TS_IP_ES>:9200"          # 미니PC2 (Tailscale IP 직결 — DNS 무관)
+ES_URL = "http://100.89.184.103:9200"          # 미니PC2 (Tailscale IP 직결 — DNS 무관)
 INDEX = "filebeat-*"
 ENV_FILE = "/etc/soc-monitor.env"              # DISCORD_WEBHOOK_URL=... (chmod 600)
 STATE_FILE = os.path.expanduser("~/soc-triage/watcher_state.json")
 
-POLL_WINDOW_MIN = 6      # cron 5분 + 1분 겹침. 빈틈보다 중복이 낫다(중복은 dedup이 잡음)
+POLL_WINDOW_MIN = 65      # cron 1시간 + 5분 겹침. 빈틈보다 중복이 낫다(중복은 dedup이 잡음)
 DEADMAN_MIN = 15         # 로그 유입 N분 중단 시 파이프라인 장애로 판정
 COOLDOWN_MIN = 360        # 동일 (signature_id, src_ip) 재분석 억제
 MAX_LLM_PER_CYCLE = 3    # 사이클당 LLM 호출 상한
-MAX_LLM_PER_DAY = 10     # 일일 상한 (비용 가드레일)
+MAX_LLM_PER_DAY = 0     # 일일 상한 (비용 가드레일)
 MIN_SEVERITY = 2         # 1=high 2=medium까지 분석, 3(low)은 통계만
 
 KNOWN_FP_PATTERNS = [
@@ -138,6 +138,7 @@ def fetch_alerts():
         "sort": [{"@timestamp": {"order": "desc"}}],
         "query": {"bool": {"filter": [
             {"exists": {"field": "suricata.eve.alert.signature_id"}},
+            {"range": {"event.severity": {"lte": MIN_SEVERITY}}},
             {"range": {"@timestamp": {"gte": f"now-{POLL_WINDOW_MIN}m"}}},
         ]}},
     }
