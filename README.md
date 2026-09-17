@@ -13,7 +13,7 @@
                               ↑ Suricata가 이 지점에서 캡처
 Suricata IDS (Proxmox LXC) → eve.json
   → Filebeat(ECS 변환) → Elasticsearch → Kibana
-  → 트리아지 워처(cron, 5분 주기) → 1차 필터(코드) → 2차 분석(LLM)
+  → 트리아지 워처(cron, 60분 주기) → 1차 필터(코드) → 2차 분석(LLM)
   → Discord 알림  (3차: 사람의 최종 판단)
 ```
 
