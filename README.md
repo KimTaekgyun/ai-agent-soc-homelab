@@ -6,16 +6,8 @@
 
 ---
 
-## 아키텍처
+<img width="1882" height="941" alt="image" src="https://github.com/user-attachments/assets/56d51d94-9cd6-4af4-bea6-6d5511c959cd" />
 
-```
-인터넷 → 벽포트 → nic1 → [인라인 브릿지, 전체 트래픽 캡처] → nic2 → 공유기
-                              ↑ Suricata가 이 지점에서 캡처
-Suricata IDS (Proxmox LXC) → eve.json
-  → Filebeat(ECS 변환) → Elasticsearch → Kibana
-  → 트리아지 워처(cron, 60분 주기) → 1차 필터(코드) → 2차 분석(LLM)
-  → Discord 알림  (3차: 사람의 최종 판단)
-```
 
 IDS와 SIEM은 물리적으로 분리된 두 대의 미니PC(Proxmox LXC / 베어메탈)에, AI 트리아지 에이전트는 클라우드 VM에 올렸다. 센서는 NAT 외부(ISP 세그먼트)에 있어서 공인 IP 기준으로 탐지한다 — 이 선택의 배경과 한계는 [한계](#한계)에 적었다.
 
