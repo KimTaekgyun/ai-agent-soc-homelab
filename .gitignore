@@ -4,3 +4,6 @@ watcher_state.json
 homenet_check.state
 *.full
 .DS_Store
+
+__pycache__/
+*.pyc
