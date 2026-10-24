@@ -3,6 +3,9 @@
 watcher.py — SOC 자동 트리아지 워처 (v2, 2026-09-01)
 위치: Oracle Cloud (hermes-server) ~/soc-triage/. cron 5분 주기 실행.
 
+※ 이 파일은 2026-10 초(오라클 운영 당시) 스냅샷이다. 현재 운영본은 AWS EC2에서
+  6시간 주기로 돌고, 1층 필터가 SID 범위 기반으로 바뀌었다(README 참고).
+
 계층 설계:
   1층 코드 필터 — 알려진 FP 제거, dedup/쿨다운, 호출 상한. 결정적·무료·즉시.
   2층 LLM 트리아지 — 1층을 통과한 alert만 Hermes(Claude)로.
@@ -26,7 +29,7 @@ import time
 import urllib.request
 
 # ── 설정 ─────────────────────────────────────────────────────────
-ES_URL = "http://100.89.184.103:9200"          # 미니PC2 (Tailscale IP 직결 — DNS 무관)
+ES_URL = os.environ.get("ES_URL", "http://localhost:9200")  # 미니PC2 Tailscale IP (공개본에서는 환경변수로 분리)
 INDEX = "filebeat-*"
 ENV_FILE = "/etc/soc-monitor.env"              # DISCORD_WEBHOOK_URL=... (chmod 600)
 STATE_FILE = os.path.expanduser("~/soc-triage/watcher_state.json")
