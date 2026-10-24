@@ -44,6 +44,8 @@
 
 ## 2. 아키텍처
 
+<img width="1882" height="941" alt="image" src="https://github.com/user-attachments/assets/56d51d94-9cd6-4af4-bea6-6d5511c959cd" />
+
 ```
 [온프레 — 수집·저장]
 인터넷 → nic1 → vmbr1(인라인 브리지) → nic2 → 공유기 → 집 안 기기
