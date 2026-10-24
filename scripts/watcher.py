@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
 watcher.py — SOC 자동 트리아지 워처 (v2, 2026-09-01)
-위치: Oracle Cloud (hermes-server) ~/soc-triage/. cron 5분 주기 실행.
-
-※ 이 파일은 2026-10 초(오라클 운영 당시) 스냅샷이다. 현재 운영본은 AWS EC2에서
-  6시간 주기로 돌고, 1층 필터가 SID 범위 기반으로 바뀌었다(README 참고).
+위치: AWS EC2 (soc-analysis) ~/soc-triage/. cron 6시간 주기 실행. (2026-10-20 오라클 클라우드에서 이전)
 
 계층 설계:
   1층 코드 필터 — 알려진 FP 제거, dedup/쿨다운, 호출 상한. 결정적·무료·즉시.
@@ -15,7 +12,7 @@ v2 변경 (v1 버그 수정):
   - ES 쿼리 sort를 desc로: v1은 asc+size 200이라 볼륨이 상한을 넘으면
     "최신 alert부터 잘리는" 최악의 실패 모드였다 (testmyids 미탐지 원인).
     desc면 상한 초과 시에도 오래된 쪽이 잘린다 — 올바른 방향의 실패.
-  - size 500: 현 볼륨(6분당 ~210건) 대비 여유.
+  - size 3000(ES_QUERY_SIZE): 6시간 윈도우 실측 ~1,500건 대비 약 2배 여유. 상한 도달 시 [WARN] 로그.
   - severity 필터는 파이썬 1층 유지: suricata.eve.alert.severity라는
     ES 경로는 실측 검증이 안 됐으므로, 검증된 필드(signature_id)만 쿼리에 사용.
   - INFO 로그에 시각 추가 (cron 실행 추적용).
@@ -29,27 +26,28 @@ import time
 import urllib.request
 
 # ── 설정 ─────────────────────────────────────────────────────────
-ES_URL = os.environ.get("ES_URL", "http://localhost:9200")  # 미니PC2 Tailscale IP (공개본에서는 환경변수로 분리)
+ES_URL = os.environ.get("ES_URL", "http://localhost:9200")  # 미니PC2 Tailscale IP 직결 (공개본에서는 환경변수로 분리)
 INDEX = "filebeat-*"
 ENV_FILE = "/etc/soc-monitor.env"              # DISCORD_WEBHOOK_URL=... (chmod 600)
 STATE_FILE = os.path.expanduser("~/soc-triage/watcher_state.json")
 
-POLL_WINDOW_MIN = 65      # cron 1시간 + 5분 겹침. 빈틈보다 중복이 낫다(중복은 dedup이 잡음)
+POLL_WINDOW_MIN = 365      # cron 6시간 + 5분 겹침. 빈틈보다 중복이 낫다(중복은 dedup이 잡음)
 DEADMAN_MIN = 15         # 로그 유입 N분 중단 시 파이프라인 장애로 판정
-COOLDOWN_MIN = 360        # 동일 (signature_id, src_ip) 재분석 억제
-MAX_LLM_PER_CYCLE = 3    # 사이클당 LLM 호출 상한
-MAX_LLM_PER_DAY = 0     # 일일 상한 (비용 가드레일)
+COOLDOWN_MIN = 300        # 동일 (signature_id, src_ip) 재분석 억제
+MAX_LLM_PER_DAY = 10     # 일일 상한 (비용 가드레일)
 MIN_SEVERITY = 2         # 1=high 2=medium까지 분석, 3(low)은 통계만
+ES_QUERY_SIZE = 3000     # 6시간 윈도우 실측 ~1,500건의 약 2배
+LLM_BATCH_MAX = 100       # 호출 1회에 보내는 (SID, src_ip) 쌍 상한. 실측 31~52(4회)의 약 2배
 
-KNOWN_FP_PATTERNS = [
-    "dhcp",
-    "ikev2",
-    "checksum",
-    "tcp option invalid",
-    "header length too small",
-    "poor reputation",
-    "dshield block listed",
-    "spamhaus drop",
+# 1층 FP 제외: 평판(IP 명단) 룰. 무차별 스캔이라 정탐이지만 조치 가치 낮음 (튜닝결정표-1016)
+# 이름 일부 매칭 대신 SID 범위 — 이름에 같은 단어가 든 진짜 위협 룰까지 버리는 것을 막기 위해.
+# 범위 근거: 2026-10-17 CT100 suricata.rules에서 2400000~2403999엔 아래 3종류만 존재.
+# 룰셋 업데이트 후 같은 확인을 다시 할 것 (명령은 핸드오프 문서).
+KNOWN_FP_SID_RANGES = [
+    (2400000, 2400999),  # ET DROP Spamhaus DROP Listed Traffic Inbound (현재 2400000~2400067, 68개)
+    (2402000, 2402999),  # ET DROP Dshield Block Listed Source (현재 2402000, 1개)
+    (2403300, 2403999),  # ET CINS Active Threat Intelligence Poor Reputation IP (현재 2403300~2403598, 299개)
+    (2500000, 2500999),  # ET COMPROMISED Known Compromised or Hostile Host (10-20 추가, 현재 15개)
 ]
 
 # ── 유틸 ─────────────────────────────────────────────────────────
@@ -137,7 +135,7 @@ def fetch_alerts():
     필드명은 ECS(suricata.eve.*) — 8/31 Kibana 실측 확인.
     sort desc: 상한 초과 시 오래된 쪽이 잘리도록 (v1 버그의 교훈)."""
     body = {
-        "size": 500,
+        "size": ES_QUERY_SIZE,
         "sort": [{"@timestamp": {"order": "desc"}}],
         "query": {"bool": {"filter": [
             {"exists": {"field": "suricata.eve.alert.signature_id"}},
@@ -146,7 +144,10 @@ def fetch_alerts():
         ]}},
     }
     out = []
-    for h in es_search(body)["hits"]["hits"]:
+    hits = es_search(body)["hits"]["hits"]
+    if len(hits) >= ES_QUERY_SIZE:
+        print(f"[WARN] ES 쿼리 상한({ES_QUERY_SIZE}) 도달 - 오래된 alert 누락 가능")
+    for h in hits:
         s = h["_source"]
         out.append({
             "ts": s.get("@timestamp"),
@@ -162,8 +163,11 @@ def fetch_alerts():
     return out
 
 def is_known_fp(a):
-    sig = a["signature"].lower()
-    return any(p in sig for p in KNOWN_FP_PATTERNS)
+    try:
+        sid = int(a["sid"])
+    except (TypeError, ValueError):
+        return False  # SID를 못 읽으면 버리지 않고 통과시킴 (보이는 쪽으로 실패)
+    return any(lo <= sid <= hi for lo, hi in KNOWN_FP_SID_RANGES)
 
 def triage_filter(alerts, state):
     """1층 필터. 반환: (LLM에 보낼 것, 통계)"""
@@ -203,7 +207,8 @@ def llm_triage(alerts):
         "(references/mitre-mapping.md 테이블 우선, 추론 시 '추론 기반' 표기) "
         "(3) 권장 조치. 이모지 금지. 마지막에 종합 위협 수준 한 줄."
     )
-    r = subprocess.run(["/home/ubuntu/.local/bin/hermes", "chat", "-q", prompt],
+    # 도구 최소 권한(10-17): skills(매핑표 읽기)만 허용. terminal, web, cronjob 등 나머지는 이 호출에서 끔
+    r = subprocess.run(["/home/ubuntu/.local/bin/hermes", "chat", "-Q", "-t", "skills", "--max-turns", "6", "-q", prompt],
                        capture_output=True, text=True, timeout=300)
     return r.stdout.strip() or f"(hermes 응답 없음, stderr: {r.stderr[:300]})"
 
@@ -234,15 +239,17 @@ def main():
                 f"[WARN] 일일 LLM 분석 상한({MAX_LLM_PER_DAY}) 도달. "
                 f"미분석 의심 alert {len(passed)}건 — Kibana 직접 확인 필요.")
         else:
-            batch = passed[:MAX_LLM_PER_CYCLE * 5]
+            batch = passed[:LLM_BATCH_MAX]
             state["llm_count"] += 1
             try:
                 report = llm_triage(batch)
             except Exception as e:
                 report = f"(LLM 분석 실패: {e}) 원본 alert:\n" + json.dumps(
                     batch, ensure_ascii=False, indent=1)
-            head = (f"[TRIAGE] 의심 alert {len(passed)}건 감지 "
-                    f"(수집 {stats['total']}, FP제외 {stats['fp']}, "
+            skipped = len(passed) - len(batch)
+            head = (f"[TRIAGE] 의심 alert {len(passed)}건 감지, {len(batch)}건 분석"
+                    + (f", {skipped}건 미분석(Kibana 확인 필요)" if skipped else "")
+                    + f" (수집 {stats['total']}, FP제외 {stats['fp']}, "
                     f"저심각도 {stats['low_sev']}, 쿨다운 {stats['cooldown']})\n\n")
             send_discord(webhook, head + report)
 

@@ -263,7 +263,10 @@ CloudTrail(다중 리전) → S3 ← Filebeat aws 모듈 (미니PC, 버킷 폴�
 
 - `docs/`: 튜닝 결정표, 사고 기록, ATT&CK 커버리지
 - `skills/`: LLM 트리아지 스킬과 MITRE 매핑
-- `scripts/`: watcher, 수동 트리아지, 공인 IP 감시
+- `scripts/`
+  - `watcher.py`: 데드맨 스위치 + 1층 코드 필터 + 2층 LLM 트리아지 (현재 운영본, 6시간 주기)
+  - `cloud_watch.py`: CloudTrail 로그 무력화 탐지 (현재 운영본, 15분 주기, LLM 없음)
+  - `triage.py`: 수동 트리아지, `homenet_check.py`: 공인 IP 변경 감시
 - `configs/`: 실제로 고친 설정만 발췌 (suricata, network)
 
-> `scripts/`의 코드는 2026-10 초 시점 스냅샷이다(오라클 클라우드 운영 당시). 현재 운영본(AWS 이전, 6시간 주기, SID 범위 필터)과 `cloud_watch.py`, 평판 룰 생성기, 룰 자동 갱신 스크립트, 자작 룰(`rules/`)은 민감정보 점검 후 추가할 예정이다.
+> 평판 룰 생성기, 룰 자동 갱신 스크립트, 자작 룰(`rules/`), `threshold.config`는 민감정보 점검 후 추가할 예정이다. 공개본에서는 ES 주소를 `ES_URL` 환경변수로 분리했다.
