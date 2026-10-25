@@ -1,0 +1,4 @@
+# 자작 룰(평판 외) 2026-10-19~. 평판 룰은 local-rep.rules(자동 생성)
+# custom rule 2: long DNS label (tunneling/exfil). 30d baseline: labels>=50 only under 5 domains.
+# exclusions: .fbcdn.net (UUID labels, 1,504 queries / 492 unique names), .quickconnect.to (shared Synology NAS; rev2: a benign hit consumed the 1h limit and masked real alerts)
+alert dns $HOME_NET any -> any any (msg:"LOCAL DNS query with unusually long label (possible tunneling)"; dns.query; pcre:"/(^|\.)[^.]{50,}\./"; content:!".fbcdn.net"; endswith; content:!".quickconnect.to"; endswith; threshold: type limit, track by_src, count 1, seconds 3600; classtype:bad-unknown; sid:1100001; rev:2;)

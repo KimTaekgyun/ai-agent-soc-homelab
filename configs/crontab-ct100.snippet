@@ -1,0 +1,3 @@
+# CT100 (suricata-ids) root crontab, 2026-10-25 기준
+*/10 * * * * /usr/bin/python3 /root/soc/homenet_check.py
+17 4 * * * /root/soc/update_rules.sh >> /var/log/soc-update-rules.log 2>&1
