@@ -21,6 +21,7 @@ soc_tools_mcp.py — 트리아지 에이전트용 읽기 전용 조사 도구 (M
 이 환경에서 실측 확인 전이다(배포 전에 Kibana에서 확인할 것, 아래 FIELD_NOTES).
 """
 
+import datetime
 import ipaddress
 import json
 import os
@@ -107,6 +108,25 @@ def _days(value):
     return d
 
 
+def _before(value):
+    """기준 시각. 비우면 지금. 과거 alert를 다시 판정할 때 그 alert 이후의 일을 보지 않게 한다
+    (재생 평가의 미래 데이터 혼입 방지, 운영에서도 alert ts를 넣으면 같은 결과)."""
+    if value in (None, ""):
+        return "now"
+    v = str(value).strip()
+    dt = datetime.datetime.fromisoformat(v.replace("Z", "+00:00"))  # 형식이 틀리면 ValueError
+    if dt.tzinfo is None:
+        raise ValueError("before에는 시간대가 필요(예: 2026-10-12T02:09:00Z)")
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z"
+
+
+def _window(before, d):
+    """[기준 시각 - d일, 기준 시각) 범위. 기준 시각 자체(그 alert)는 이력에서 뺀다."""
+    if before == "now":
+        return {"gte": f"now-{d}d", "lt": "now"}
+    return {"gte": f"{before}||-{d}d", "lt": before}
+
+
 def _run(tool, args, fn):
     try:
         out = fn()
@@ -123,19 +143,20 @@ def _run(tool, args, fn):
 
 # ── 도구 1: IP 이력 ──────────────────────────────────────────────
 @mcp.tool()
-def ip_history(ip: str, days: int = 7) -> str:
+def ip_history(ip: str, days: int = 7, before: str = "") -> str:
     """Suricata alert에서 이 IP(출발지 또는 목적지)의 과거 이력을 요약한다.
     같은 IP가 이전에도 왔는지, 어떤 시그니처로, 며칠에 걸쳐 왔는지 확인할 때 쓴다.
-    days: 1~14. 반환값의 숫자는 코드가 센 것이다(추정 아님)."""
+    days: 1~14. before: 판정 중인 alert의 ts(ISO, 시간대 포함). 그 시각 이전 이력만 본다(비우면 지금).
+    반환값의 숫자는 코드가 센 것이다(추정 아님)."""
     def fn():
-        addr, d = _ip(ip), _days(days)
+        addr, d, b = _ip(ip), _days(days), _before(before)
         body = {
             "size": 0,
             "track_total_hits": True,
             "query": {"bool": {
                 "filter": [
                     {"exists": {"field": "suricata.eve.alert.signature_id"}},
-                    {"range": {"@timestamp": {"gte": f"now-{d}d"}}},
+                    {"range": {"@timestamp": _window(b, d)}},
                 ],
                 "should": [{"term": {"source.ip": addr}}, {"term": {"destination.ip": addr}}],
                 "minimum_should_match": 1,
@@ -153,7 +174,7 @@ def ip_history(ip: str, days: int = 7) -> str:
         r = _search(body)
         a = r["aggregations"]
         return {
-            "ip": addr, "window_days": d,
+            "ip": addr, "window_days": d, "before": b,
             "alert_count": r["hits"]["total"]["value"],
             "first_seen": a["first"].get("value_as_string"),
             "last_seen": a["last"].get("value_as_string"),
@@ -166,7 +187,7 @@ def ip_history(ip: str, days: int = 7) -> str:
             ],
             "top_dest_ports": {str(b["key"]): b["doc_count"] for b in a["ports"]["buckets"]},
         }
-    return _run("ip_history", {"ip": ip, "days": days}, fn)
+    return _run("ip_history", {"ip": ip, "days": days, "before": before}, fn)
 
 
 # ── 도구 2: 같은 플로우의 상세 ─────────────────────────────────────
@@ -216,19 +237,20 @@ def flow_detail(flow_id: int) -> str:
 
 # ── 도구 3: 같은 IP의 AWS 계정 활동 ─────────────────────────────────
 @mcp.tool()
-def cloudtrail_by_ip(ip: str, days: int = 7) -> str:
+def cloudtrail_by_ip(ip: str, days: int = 7, before: str = "") -> str:
     """AWS CloudTrail에서 이 IP가 출발지인 API 호출을 요약한다.
     가정망에서 본 의심 IP가 AWS 계정에도 접근했는지(두 공격면 교차) 확인할 때 쓴다.
+    before: 판정 중인 alert의 ts(ISO, 시간대 포함). 그 시각 이전만 본다(비우면 지금).
     결과 0건은 '이 기간·이 IP로는 계정 활동이 없었다'는 뜻이다."""
     def fn():
-        addr, d = _ip(ip), _days(days)
+        addr, d, b = _ip(ip), _days(days), _before(before)
         body = {
             "size": 0,
             "track_total_hits": True,
             "query": {"bool": {"filter": [
                 {"term": {"event.dataset": "aws.cloudtrail"}},
                 {"term": {"source.ip": addr}},
-                {"range": {"@timestamp": {"gte": f"now-{d}d"}}},
+                {"range": {"@timestamp": _window(b, d)}},
             ]}},
             "aggs": {
                 "actions": {"terms": {"field": "event.action", "size": 15}},
@@ -241,7 +263,7 @@ def cloudtrail_by_ip(ip: str, days: int = 7) -> str:
         r = _search(body)
         a = r["aggregations"]
         return {
-            "ip": addr, "window_days": d,
+            "ip": addr, "window_days": d, "before": b,
             "api_call_count": r["hits"]["total"]["value"],
             "first_seen": a["first"].get("value_as_string"),
             "last_seen": a["last"].get("value_as_string"),
@@ -249,7 +271,7 @@ def cloudtrail_by_ip(ip: str, days: int = 7) -> str:
             "outcome": {b["key"]: b["doc_count"] for b in a["outcome"]["buckets"]},
             "identities": [_clean(b["key"]) for b in a["users"]["buckets"]],
         }
-    return _run("cloudtrail_by_ip", {"ip": ip, "days": days}, fn)
+    return _run("cloudtrail_by_ip", {"ip": ip, "days": days, "before": before}, fn)
 
 
 FIELD_NOTES = """
